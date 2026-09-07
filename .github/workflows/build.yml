@@ -20,7 +20,8 @@ jobs:
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          pip3 install remotezip
+          # تثبيت المكتبة مع إضافة أمر كسر بيئة النظام لتفادي الخطأ
+          pip3 install remotezip --break-system-packages
           
           python3 -c "
           import remotezip
@@ -36,7 +37,6 @@ jobs:
               plist = plistlib.loads(manifest_data)
               manifest = plist['BuildIdentities'][0]['Manifest']
               
-              # قائمة بكافة الملفات المطلوبة للإقلاع الكامل الظاهر في الأداة
               targets = {
                   'RestoreRamDisk': manifest['RestoreRamDisk']['Info']['Path'],
                   'iBSS': manifest['iBSS']['Info']['Path'],
@@ -54,7 +54,6 @@ jobs:
                   'SEP': manifest['SEP']['Info']['Path'] if 'SEP' in manifest else None
               }
               
-              # إنشاء مستند نصي بالمسارات وحفظ وتحميل كل ملف متاح
               with open('paths.txt', 'w') as p:
                   for name, path in targets.items():
                       if path:
@@ -68,17 +67,14 @@ jobs:
           set -ex
           export $(cat paths.txt | xargs)
           
-          # إعداد مجلد المخرجات النهائي
           mkdir -p bootchain_outputs
           
-          # نقل وتصنيف الملفات المستخرجة وإعادة تسميتها تلقائياً لحروف صغيرة متوافقة مع الأداة
           cp "$RAMDISK_PATH" original_ramdisk.dmg || cp $(basename "$RAMDISK_PATH") original_ramdisk.dmg || true
           cp "$IBSS_PATH" bootchain_outputs/ibss.im4p || cp $(basename "$IBSS_PATH") bootchain_outputs/ibss.im4p || true
           cp "$IBEC_PATH" bootchain_outputs/ibec.im4p || cp $(basename "$IBEC_PATH") bootchain_outputs/ibec.im4p || true
           cp "$DVT_PATH" bootchain_outputs/devicetree.img4 || cp $(basename "$DVT_PATH") bootchain_outputs/devicetree.img4 || true
           cp "$KERN_PATH" bootchain_outputs/kernelcache.img4 || cp $(basename "$KERN_PATH") bootchain_outputs/kernelcache.img4 || true
           
-          # نقل ملفات المعالجات المساعدة والدقيقة الفرعية (Co-Processors)
           mkdir -p bootchain_outputs/firmware
           find . -name "*.im4p" -maxdepth 4 -exec cp {} bootchain_outputs/firmware/ \; 2>/dev/null || true
           find . -name "*.img4" -maxdepth 4 -exec cp {} bootchain_outputs/firmware/ \; 2>/dev/null || true
@@ -133,7 +129,6 @@ jobs:
             ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020 || true
           fi
           
-          # استعراض المجلد للتأكد من وجود كافة الحزم المستخرجة
           cd bootchain_outputs
           ls -la
           ls -la firmware/ || true
@@ -141,5 +136,5 @@ jobs:
       - name: Upload Complete Pack (All Bootchain Files)
         uses: actions/upload-artifact@v4
         with:
-          name: Full-EFT-Bootchain-Package
+          name: ramdisk-files
           path: bootchain_outputs/

@@ -13,49 +13,43 @@ jobs:
 
       - name: Make tools executable
         run: |
-          # تفعيل الصلاحيات لملف pzb الفعلي المتواجد في مستودعك وبقية الأدوات
           chmod +x ./pzb ./img4 ./gtar ./trustcache
 
       - name: Download BuildManifest and Extract All Paths
         run: |
           set -ex
-          IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
+          IPSW_URL="https://cdn-apple.com"
           
-          # تشغيل أداة pzb المحلية الصحيحة لجلب ملف البيلد مانيفست
           ./pzb -g BuildManifest.plist "$IPSW_URL"
           
-          # استخراج المسارات الدقيقة عبر بايثون
-          python3 -c '
+          python3 -c "
           import plistlib
-          with open("BuildManifest.plist", "rb") as f:
+          with open('BuildManifest.plist', 'rb') as f:
               plist = plistlib.load(f)
           
-          # جلب أول identity متوافقة مع الأجهزة
-          identity = plist["BuildIdentities"][0]
-          manifest = identity["Manifest"]
+          manifest = plist['BuildIdentities'][0]['Manifest']
           
-          print(f"RAMDISK_PATH={manifest[\"RestoreRamDisk\"][\"Info\"][\"Path\"]}")
-          print(f"IBSS_PATH={manifest[\"iBSS\"][\"Info\"][\"Path\"]}")
-          # التحقق من وجود ملف iBEC لتفادي الأخطاء في بعض الإصدارات
-          if "iBEC" in manifest:
-              print(f"IBEC_PATH={manifest[\"iBEC\"][\"Info\"][\"Path\"]}")
+          print('RAMDISK_PATH=' + manifest['RestoreRamDisk']['Info']['Path'])
+          print('IBSS_PATH=' + manifest['iBSS']['Info']['Path'])
+          
+          if 'iBEC' in manifest:
+              print('IBEC_PATH=' + manifest['iBEC']['Info']['Path'])
           else:
-              print(f"IBEC_PATH={manifest[\"iBSS\"][\"Info\"][\"Path\"].replace(\"iBSS\", \"iBEC\")}")
-          print(f"DVT_PATH={manifest[\"DeviceTree\"][\"Info\"][\"Path\"]}")
-          print(f"KERN_PATH={manifest[\"KernelCache\"][\"Info\"][\"Path\"]}")
-          ' > paths.txt
+              print('IBEC_PATH=' + manifest['iBSS']['Info']['Path'].replace('iBSS', 'iBEC'))
+              
+          print('DVT_PATH=' + manifest['DeviceTree']['Info']['Path'])
+          print('KERN_PATH=' + manifest['KernelCache']['Info']['Path'])
+          " > paths.txt
 
           cat paths.txt
 
       - name: Download and decrypt ramdisk & bootchain files
         run: |
           set -ex
-          IPSW_URL="https://cdn-apple.com"
+          IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # استيراد المسارات المستخرجة
           export $(cat paths.txt | xargs)
           
-          # تحميل الرام ديسك وباقي الملفات الكاملة عبر أداة pzb
           ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(basename "$RAMDISK_PATH")
           mv "$RAMDISK_FILE" original_ramdisk.dmg
@@ -101,13 +95,11 @@ jobs:
           set -ex
           mkdir -p bootchain_outputs
           
-          # نقل وتجميع كافة ملفات الـ Bootchain المستخرجة للآيفون 11 برو داخل المجلد النهائي
           mv *iBSS* bootchain_outputs/ibss.im4p 2>/dev/null || mv *iBSS* bootchain_outputs/ibss.img4 2>/dev/null || true
           mv *iBEC* bootchain_outputs/ibec.im4p 2>/dev/null || mv *iBEC* bootchain_outputs/ibec.img4 2>/dev/null || true
           mv *DeviceTree* bootchain_outputs/devicetree.img4 2>/dev/null || true
           mv *kernelcache* bootchain_outputs/kernelcache.img4 2>/dev/null || true
           
-          # إنشاء الترويسة (Trustcache)
           ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin
           mkdir -p work/sshtar
           ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar
@@ -118,7 +110,6 @@ jobs:
       - name: Sign ramdisk and finalize package
         run: |
           set -ex
-          # توقيع ملف الرام ديسك المعدل الجديد ونقله لحزمة المخرجات
           ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020
           
           cd bootchain_outputs

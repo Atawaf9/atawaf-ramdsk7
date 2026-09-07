@@ -11,85 +11,54 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies
+      - name: Make tools executable
         run: |
-          set -ex
-          brew update || true
-          brew install xz gnu-tar || true
-          
-          curl -LO "https://github.com" || curl -LO "https://github.com" || true
-          if [ -f pzp_macOS.zip ]; then
-            unzip pzp_macOS.zip
-            mv pzp_macOS pzb
-          else
-            mv pzp pzb || echo "Using local or default"
-          fi
-          
-          chmod +x ./pzb || true
-          chmod +x ./img4 || true
-          chmod +x ./gtar || true
-          chmod +x ./trustcache || true
+          chmod +x pzp img4 gtar trustcache
 
-      - name: Setup Repository Tools
-        run: |
-          set -ex
-          chmod +x ./img4 || true
-          chmod +x ./gtar || true
-          chmod +x ./trustcache || true
-
-      - name: Download and decrypt ramdisk & bootchain files
+      - name: Download BuildManifest and Extract All Paths
         run: |
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. جلب ملف الـ BuildManifest
-          ./pzb -g BuildManifest.plist "$IPSW_URL"
+          # 1. جلب ملف الـ BuildManifest بنفس طريقتك الناجحة
+          ./pzp -g BuildManifest.plist "$IPSW_URL"
           
-          # 2. تحويل الملف من الصيغة الثنائية إلى صيغة XML نصية مقروءة (حل المشكلة الرئيسي)
-          plutil -convert xml1 BuildManifest.plist
+          # 2. استخراج المسارات بدقة عبر بايثون لتفادي خطأ الأسماء الفارغة
+          python3 -c '
+          import plistlib
+          with open("BuildManifest.plist", "rb") as f:
+              plist = plistlib.load(f)
           
-          # 3. استخراج مسار الرام ديسك الأصلي بدقة عالية بعد تحويل الملف
-          RAMDISK_PATH=$(grep -A 2 "RestoreRamDisk" BuildManifest.plist | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          if [ -z "$RAMDISK_PATH" ]; then
-            RAMDISK_PATH=$(grep -A 10 "RestoreRamDisk" BuildManifest.plist | grep "AssetData/boot" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          fi
+          manifest = plist["BuildIdentities"][0]["Manifest"]
           
-          echo "Found Ramdisk Path: $RAMDISK_PATH"
+          print(f"RAMDISK_PATH={manifest[\"RestoreRamDisk\"][\"Info\"][\"Path\"]}")
+          print(f"IBSS_PATH={manifest[\"iBSS\"][\"Info\"][\"Path\"]}")
+          print(f"IBEC_PATH={manifest[\"iBEC\"][\"Info\"][\"Path\"]}")
+          print(f"DVT_PATH={manifest[\"DeviceTree\"][\"Info\"][\"Path\"]}")
+          print(f"KERN_PATH={manifest[\"KernelCache\"][\"Info\"][\"Path\"]}")
+          ' > paths.txt
+
+          # تصدير المسارات كمتغيرات للنظام
+          cat paths.txt
+
+      - name: Download and decrypt ramdisk & bootchain files
+        run: |
+          set -ex
+          IPSW_URL="https://cdn-apple.com"
           
-          # التحقق من أن المسار ليس فارغاً لتفادي الـ Crash
-          if [ -z "$RAMDISK_PATH" ]; then
-            echo "Error: Could not find Ramdisk Path in BuildManifest.plist"
-            exit 1
-          fi
+          # قراءة المتغيرات المستخرجة
+          export $(cat paths.txt | xargs)
           
-          ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
+          # تحميل الرام ديسك الأصلي وضبط اسمه
+          ./pzp -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(basename "$RAMDISK_PATH")
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
-          # 4. استخراج ملفات الـ Bootchain الكاملة الخاصة بـ iPhone 11 Pro (d421ap)
-          # سنستخدم أداة plutil المدمجة في الماك لقراءة المسارات بشكل رسمي ومضمون 100% بدون أخطاء النصوص
-          IBSS_PATH=$(grep -A 5 "iBSS" BuildManifest.plist | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          IBEC_PATH=$(grep -A 5 "iBEC" BuildManifest.plist | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          
-          # البحث عن ملفات معالج d421ap للآيفون 11 برو
-          DVT_PATH=$(grep -B 5 -A 20 "d421ap" BuildManifest.plist | grep -A 10 "DeviceTree" | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          if [ -z "$DVT_PATH" ]; then
-            DVT_PATH=$(grep -A 20 "DeviceTree" BuildManifest.plist | grep "d421ap" -A 2 | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          fi
-          
-          KERN_PATH=$(grep -B 5 -A 20 "d421ap" BuildManifest.plist | grep -A 10 "KernelCache" | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          if [ -z "$KERN_PATH" ]; then
-            KERN_PATH=$(grep -A 20 "KernelCache" BuildManifest.plist | grep "d421ap" -A 2 | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          fi
-
-          ./pzb -g "$IBSS_PATH" "$IPSW_URL"
-          ./pzb -g "$IBEC_PATH" "$IPSW_URL"
-          ./pzb -g "$DVT_PATH" "$IPSW_URL"
-          ./pzb -g "$KERN_PATH" "$IPSW_URL"
-
-          # نقل وتجهيز كافة مخرجات الـ Bootchain في مجلد مستقل
-          mkdir -p bootchain_outputs
-          mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
+          # تحميل باقي ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache)
+          ./pzp -g "$IBSS_PATH" "$IPSW_URL"
+          ./pzp -g "$IBEC_PATH" "$IPSW_URL"
+          ./pzp -g "$DVT_PATH" "$IPSW_URL"
+          ./pzp -g "$KERN_PATH" "$IPSW_URL"
 
       - name: Mount original and create new ramdisk
         run: |
@@ -112,39 +81,44 @@ jobs:
           set -ex
           mkdir -p SSHRD
           sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk1.dmg
-          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || true
-          cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems || true
-          chmod 755 SSHRD/usr/sbin/mount_filesystems || true
+          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD
+          cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems
+          chmod 755 SSHRD/usr/sbin/mount_filesystems
           sudo hdiutil detach -force SSHRD
 
       - name: Resize image
         run: |
           set -ex
-          sudo hdiutil resize -sectors min ramdisk1.dmg || true
+          sudo hdiutil resize -sectors min ramdisk1.dmg
 
-      - name: Build trustcache
+      - name: Build trustcache and prepare outputs
         run: |
           set -ex
-          if [ -f 094-32271-023.dmg.trustcache ]; then
-            ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin || true
-            mkdir -p work/sshtar
-            ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || true
-            cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems || true
-            ./trustcache append trustcache.bin $(sshtarlist.txt) || true
-            ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020 || true
-          fi
+          # تجهيز مجلد المخرجات النهائي ليتم رفعه كـ Artifact
+          mkdir -p bootchain_outputs
+          
+          # نقل ملفات الـ Bootchain المستخرجة وتجهيز أسمائها بحروف صغيرة
+          mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
+          
+          # بناء التراست كاش (الترويسة) ونقله للمجلد
+          ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin
+          mkdir -p work/sshtar
+          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar
+          cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems
+          ./trustcache append trustcache.bin $(cat sshtarlist.txt)
+          ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020
 
-      - name: Sign ramdisk and pack everything
+      - name: Sign ramdisk and finalize package
         run: |
           set -ex
-          if [ -f ramdisk1.dmg ]; then
-            ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020 || true
-          fi
-          cd bootchain_outputs || true
+          # توقيع الرام ديسك المعدل الجديد وحفظه في مجلد المخرجات
+          ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020
+          
+          cd bootchain_outputs
           ls -la
 
-      - name: Upload Complete macOS Package
+      - name: Upload Complete Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Full-SSH-Ramdisk-Package-macOS
+          name: ramdisk-files
           path: bootchain_outputs/

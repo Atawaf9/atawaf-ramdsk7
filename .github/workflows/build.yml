@@ -1,4 +1,4 @@
-name: Build Full SSH Ramdisk
+name: Build Full SSH Ramdisk (macOS)
 
 on:
   workflow_dispatch:
@@ -11,46 +11,47 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install and Setup Official pzp Tool
+      - name: Install System Dependencies via Brew
         run: |
           set -ex
-          # تحميل أحدث نسخة رسمية مستقرة من أداة pzp المخصصة لنظام macOS
-          curl -LO "https://github.com"
-          unzip pzp_macOS.zip
-          
-          # استبدال الملف القديم بالأداة الرسمية الصحيحة وتفعيل صلاحياتها
-          mv pzp_macOS pzp
-          chmod +x pzp
-          chmod +x img4 || true
-          chmod +x gtar || true
-          chmod +x trustcache || true
+          # تحديث وتثبيت الأدوات الأساسية لنظام الماك
+          brew update
+          brew install lzma xz gnu-tar tihmstar/tap/pzb
+
+      - name: Setup Repository Tools
+        run: |
+          set -ex
+          # تفعيل صلاحيات الأدوات المرفوعة في مستودعك للماك
+          chmod +x ./img4 || true
+          chmod +x ./gtar || true
+          chmod +x ./trustcache || true
 
       - name: Download and decrypt ramdisk & bootchain files
         run: |
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. استخراج الـ BuildManifest
-          ./pzp -g BuildManifest.plist "$IPSW_URL"
+          # 1. جلب ملف الـ BuildManifest باستخدام أداة pzb المثبتة عبر brew
+          pzb -g BuildManifest.plist "$IPSW_URL"
           
           # 2. استخراج الرام ديسك الأصلي
           RAMDISK_PATH=$(grep -A10 "RestoreRamDisk" BuildManifest.plist | grep -A1 "Path" | grep -v "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          ./pzp -g "$RAMDISK_PATH" "$IPSW_URL"
+          pzb -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(ls *.dmg | head -1)
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
-          # 3. استخراج ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache) لـ iPhone 11 Pro (d421ap)
+          # 3. استخراج ملفات الـ Bootchain الكاملة الخاصة بـ iPhone 11 Pro (d421ap)
           IBSS_PATH=$(grep -A20 "iBSS" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           IBEC_PATH=$(grep -A20 "iBEC" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           DVT_PATH=$(grep -A30 "DeviceTree" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           KERN_PATH=$(grep -A30 "KernelCache" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
 
-          ./pzp -g "$IBSS_PATH" "$IPSW_URL"
-          ./pzp -g "$IBEC_PATH" "$IPSW_URL"
-          ./pzp -g "$DVT_PATH" "$IPSW_URL"
-          ./pzp -g "$KERN_PATH" "$IPSW_URL"
+          pzb -g "$IBSS_PATH" "$IPSW_URL"
+          pzb -g "$IBEC_PATH" "$IPSW_URL"
+          pzb -g "$DVT_PATH" "$IPSW_URL"
+          pzb -g "$KERN_PATH" "$IPSW_URL"
 
-          # تجميع كافة ملفات الإقلاع المستخرجة في مجلد المخرجات
+          # نقل وتجهيز كافة مخرجات الـ Bootchain في مجلد مستقل
           mkdir -p bootchain_outputs
           mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
 
@@ -75,7 +76,8 @@ jobs:
           set -ex
           mkdir -p SSHRD
           sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk1.dmg
-          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || true
+          # استخدام gtar المرفوع أو المثبت عبر النظام لتعديل الملفات داخلياً
+          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || true
           cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems || true
           chmod 755 SSHRD/usr/sbin/mount_filesystems || true
           sudo hdiutil detach -force SSHRD
@@ -91,7 +93,7 @@ jobs:
           if [ -f 094-32271-023.dmg.trustcache ]; then
             ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin || true
             mkdir -p work/sshtar
-            ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || true
+            gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || true
             cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems || true
             ./trustcache append trustcache.bin $(sshtarlist.txt) || true
             ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020 || true
@@ -106,8 +108,8 @@ jobs:
           cd bootchain_outputs || true
           ls -la
 
-      - name: Upload artifacts
+      - name: Upload Complete macOS Package
         uses: actions/upload-artifact@v4
         with:
-          name: Full-SSH-Ramdisk-Package
+          name: Full-SSH-Ramdisk-Package-macOS
           path: bootchain_outputs/

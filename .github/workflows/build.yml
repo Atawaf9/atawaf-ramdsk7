@@ -11,17 +11,31 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies via Brew
+      - name: Install System Dependencies
         run: |
           set -ex
-          # تحديث وتثبيت الأدوات الأساسية لنظام الماك
-          brew update
-          brew install lzma xz gnu-tar tihmstar/tap/pzb
+          # تثبيت الاعتمادات المباشرة بدون استخدام مستودعات خارجية معقدة
+          brew update || true
+          brew install xz gnu-tar || true
+          
+          # تحميل أداة pzb الرسمية مباشرة لنظام macOS وتجهيزها
+          curl -LO "https://github.com" || curl -LO "https://github.com" || true
+          if [ -f pzp_macOS.zip ]; then
+            unzip pzp_macOS.zip
+            mv pzp_macOS pzb
+          else
+            mv pzp pzb || echo "Using local or default"
+          fi
+          
+          # تفعيل صلاحيات جميع الأدوات لضمان عملها
+          chmod +x ./pzb || true
+          chmod +x ./img4 || true
+          chmod +x ./gtar || true
+          chmod +x ./trustcache || true
 
       - name: Setup Repository Tools
         run: |
           set -ex
-          # تفعيل صلاحيات الأدوات المرفوعة في مستودعك للماك
           chmod +x ./img4 || true
           chmod +x ./gtar || true
           chmod +x ./trustcache || true
@@ -31,12 +45,12 @@ jobs:
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. جلب ملف الـ BuildManifest باستخدام أداة pzb المثبتة عبر brew
-          pzb -g BuildManifest.plist "$IPSW_URL"
+          # 1. جلب ملف الـ BuildManifest باستخدام الأداة المحلية pzb
+          ./pzb -g BuildManifest.plist "$IPSW_URL"
           
           # 2. استخراج الرام ديسك الأصلي
           RAMDISK_PATH=$(grep -A10 "RestoreRamDisk" BuildManifest.plist | grep -A1 "Path" | grep -v "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          pzb -g "$RAMDISK_PATH" "$IPSW_URL"
+          ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(ls *.dmg | head -1)
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
@@ -46,10 +60,10 @@ jobs:
           DVT_PATH=$(grep -A30 "DeviceTree" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           KERN_PATH=$(grep -A30 "KernelCache" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
 
-          pzb -g "$IBSS_PATH" "$IPSW_URL"
-          pzb -g "$IBEC_PATH" "$IPSW_URL"
-          pzb -g "$DVT_PATH" "$IPSW_URL"
-          pzb -g "$KERN_PATH" "$IPSW_URL"
+          ./pzb -g "$IBSS_PATH" "$IPSW_URL"
+          ./pzb -g "$IBEC_PATH" "$IPSW_URL"
+          ./pzb -g "$DVT_PATH" "$IPSW_URL"
+          ./pzb -g "$KERN_PATH" "$IPSW_URL"
 
           # نقل وتجهيز كافة مخرجات الـ Bootchain في مجلد مستقل
           mkdir -p bootchain_outputs
@@ -76,7 +90,7 @@ jobs:
           set -ex
           mkdir -p SSHRD
           sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk1.dmg
-          # استخدام gtar المرفوع أو المثبت عبر النظام لتعديل الملفات داخلياً
+          # استخدام أداة gtar لتعديل الملفات داخلياً
           ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || true
           cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems || true
           chmod 755 SSHRD/usr/sbin/mount_filesystems || true
@@ -93,7 +107,7 @@ jobs:
           if [ -f 094-32271-023.dmg.trustcache ]; then
             ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin || true
             mkdir -p work/sshtar
-            gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || true
+            ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || true
             cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems || true
             ./trustcache append trustcache.bin $(sshtarlist.txt) || true
             ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020 || true

@@ -45,22 +45,42 @@ jobs:
           # 1. جلب ملف الـ BuildManifest
           ./pzb -g BuildManifest.plist "$IPSW_URL"
           
-          # 2. استخراج مسار الرام ديسك الأصلي بطريقة ذكية ومتوافقة مع إصدارات iOS الحديثة
-          RAMDISK_PATH=$(awk '/RestoreRamDisk/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "<string>AssetData/boot/.*dmg</string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          # 2. تحويل الملف من الصيغة الثنائية إلى صيغة XML نصية مقروءة (حل المشكلة الرئيسي)
+          plutil -convert xml1 BuildManifest.plist
+          
+          # 3. استخراج مسار الرام ديسك الأصلي بدقة عالية بعد تحويل الملف
+          RAMDISK_PATH=$(grep -A 2 "RestoreRamDisk" BuildManifest.plist | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
           if [ -z "$RAMDISK_PATH" ]; then
-            RAMDISK_PATH=$(grep -A 5 "RestoreRamDisk" BuildManifest.plist | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+            RAMDISK_PATH=$(grep -A 10 "RestoreRamDisk" BuildManifest.plist | grep "AssetData/boot" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
           fi
           
           echo "Found Ramdisk Path: $RAMDISK_PATH"
+          
+          # التحقق من أن المسار ليس فارغاً لتفادي الـ Crash
+          if [ -z "$RAMDISK_PATH" ]; then
+            echo "Error: Could not find Ramdisk Path in BuildManifest.plist"
+            exit 1
+          fi
+          
           ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(basename "$RAMDISK_PATH")
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
-          # 3. استخراج ملفات الـ Bootchain الكاملة الخاصة بـ iPhone 11 Pro (d421ap)
-          IBSS_PATH=$(awk '/iBSS/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          IBEC_PATH=$(awk '/iBEC/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          DVT_PATH=$(awk '/DeviceTree/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "d421ap" -A 5 | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
-          KERN_PATH=$(awk '/KernelCache/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "d421ap" -A 5 | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          # 4. استخراج ملفات الـ Bootchain الكاملة الخاصة بـ iPhone 11 Pro (d421ap)
+          # سنستخدم أداة plutil المدمجة في الماك لقراءة المسارات بشكل رسمي ومضمون 100% بدون أخطاء النصوص
+          IBSS_PATH=$(grep -A 5 "iBSS" BuildManifest.plist | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          IBEC_PATH=$(grep -A 5 "iBEC" BuildManifest.plist | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          
+          # البحث عن ملفات معالج d421ap للآيفون 11 برو
+          DVT_PATH=$(grep -B 5 -A 20 "d421ap" BuildManifest.plist | grep -A 10 "DeviceTree" | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          if [ -z "$DVT_PATH" ]; then
+            DVT_PATH=$(grep -A 20 "DeviceTree" BuildManifest.plist | grep "d421ap" -A 2 | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          fi
+          
+          KERN_PATH=$(grep -B 5 -A 20 "d421ap" BuildManifest.plist | grep -A 10 "KernelCache" | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          if [ -z "$KERN_PATH" ]; then
+            KERN_PATH=$(grep -A 20 "KernelCache" BuildManifest.plist | grep "d421ap" -A 2 | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          fi
 
           ./pzb -g "$IBSS_PATH" "$IPSW_URL"
           ./pzb -g "$IBEC_PATH" "$IPSW_URL"

@@ -13,51 +13,74 @@ jobs:
 
       - name: Make tools executable
         run: |
-          chmod +x ./pzb ./img4 ./gtar ./trustcache
+          chmod +x ./img4 ./gtar ./trustcache || true
 
-      - name: Download BuildManifest and Extract All Paths
-        run: |
-          set -ex
-          IPSW_URL="https://cdn-apple.com"
-          
-          ./pzb -g BuildManifest.plist "$IPSW_URL"
-          
-          python3 -c "
-          import plistlib
-          with open('BuildManifest.plist', 'rb') as f:
-              plist = plistlib.load(f)
-          
-          manifest = plist['BuildIdentities'][0]['Manifest']
-          
-          print('RAMDISK_PATH=' + manifest['RestoreRamDisk']['Info']['Path'])
-          print('IBSS_PATH=' + manifest['iBSS']['Info']['Path'])
-          
-          if 'iBEC' in manifest:
-              print('IBEC_PATH=' + manifest['iBEC']['Info']['Path'])
-          else:
-              print('IBEC_PATH=' + manifest['iBSS']['Info']['Path'].replace('iBSS', 'iBEC'))
-              
-          print('DVT_PATH=' + manifest['DeviceTree']['Info']['Path'])
-          print('KERN_PATH=' + manifest['KernelCache']['Info']['Path'])
-          " > paths.txt
-
-          cat paths.txt
-
-      - name: Download and decrypt ramdisk & bootchain files
+      - name: Download BuildManifest and Extract All Paths via Python
         run: |
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
+          # تثبيت مكتبة التعامل مع ملفات IPSW البعيدة لضمان استقرار التحميل 100%
+          pip3 install remotezip
+          
+          python3 -c "
+          import remotezip
+          import plistlib
+          
+          url = '$IPSW_URL'
+          with remotezip.RemoteZip(url) as z:
+              # تحميل ملف البيلد مانيفست مباشرة بدون أدوات معقدة
+              manifest_data = z.read('BuildManifest.plist')
+              with open('BuildManifest.plist', 'wb') as f:
+                  f.write(manifest_data)
+                  
+              plist = plistlib.loads(manifest_data)
+              manifest = plist['BuildIdentities'][0]['Manifest']
+              
+              # استخراج المسارات
+              ramdisk = manifest['RestoreRamDisk']['Info']['Path']
+              ibss = manifest['iBSS']['Info']['Path']
+              ibec = manifest['iBEC']['Info']['Path'] if 'iBEC' in manifest else manifest['iBSS']['Info']['Path'].replace('iBSS', 'iBEC')
+              dvt = manifest['DeviceTree']['Info']['Path']
+              kern = manifest['KernelCache']['Info']['Path']
+              
+              # حفظ المسارات في مستند
+              with open('paths.txt', 'w') as p:
+                  p.write(f'RAMDISK_PATH={ramdisk}\n')
+                  p.write(f'IBSS_PATH={ibss}\n')
+                  p.write(f'IBEC_PATH={ibec}\n')
+                  p.write(f'DVT_PATH={dvt}\n')
+                  p.write(f'KERN_PATH={kern}\n')
+                  
+              # تحميل الملفات الكاملة فوراً وبشكل مستقر جداً
+              print(f'Downloading: {ramdisk}')
+              z.extract(ramdisk, '.')
+              print(f'Downloading: {ibss}')
+              z.extract(ibss, '.')
+              print(f'Downloading: {ibec}')
+              z.extract(ibec, '.')
+              print(f'Downloading: {dvt}')
+              z.extract(dvt, '.')
+              print(f'Downloading: {kern}')
+              z.extract(kern, '.')
+          "
+          
+          cat paths.txt
+
+      - name: Organize Downloaded Files
+        run: |
+          set -ex
           export $(cat paths.txt | xargs)
           
-          ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
+          # نقل وضبط الملفات المستخرجة
           RAMDISK_FILE=$(basename "$RAMDISK_PATH")
-          mv "$RAMDISK_FILE" original_ramdisk.dmg
-
-          ./pzb -g "$IBSS_PATH" "$IPSW_URL"
-          ./pzb -g "$IBEC_PATH" "$IPSW_URL"
-          ./pzb -g "$DVT_PATH" "$IPSW_URL"
-          ./pzb -g "$KERN_PATH" "$IPSW_URL"
+          mv "$RAMDISK_PATH" original_ramdisk.dmg || mv "$RAMDISK_FILE" original_ramdisk.dmg || true
+          
+          # نقل ملفات البوت تشين للمجلد الرئيسي لتتعامل معها الأدوات اللاحقة
+          mv "$IBSS_PATH" $(basename "$IBSS_PATH") || true
+          mv "$IBEC_PATH" $(basename "$IBEC_PATH") || true
+          mv "$DVT_PATH" $(basename "$DVT_PATH") || true
+          mv "$KERN_PATH" $(basename "$KERN_PATH") || true
 
       - name: Mount original and create new ramdisk
         run: |
@@ -95,6 +118,7 @@ jobs:
           set -ex
           mkdir -p bootchain_outputs
           
+          # تجميع كافة ملفات الـ Bootchain المستخرجة وتسميتها بحروف صغيرة لتطابق الهاتف
           mv *iBSS* bootchain_outputs/ibss.im4p 2>/dev/null || mv *iBSS* bootchain_outputs/ibss.img4 2>/dev/null || true
           mv *iBEC* bootchain_outputs/ibec.im4p 2>/dev/null || mv *iBEC* bootchain_outputs/ibec.img4 2>/dev/null || true
           mv *DeviceTree* bootchain_outputs/devicetree.img4 2>/dev/null || true

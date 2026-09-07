@@ -14,11 +14,9 @@ jobs:
       - name: Install System Dependencies
         run: |
           set -ex
-          # تثبيت الاعتمادات المباشرة بدون استخدام مستودعات خارجية معقدة
           brew update || true
           brew install xz gnu-tar || true
           
-          # تحميل أداة pzb الرسمية مباشرة لنظام macOS وتجهيزها
           curl -LO "https://github.com" || curl -LO "https://github.com" || true
           if [ -f pzp_macOS.zip ]; then
             unzip pzp_macOS.zip
@@ -27,7 +25,6 @@ jobs:
             mv pzp pzb || echo "Using local or default"
           fi
           
-          # تفعيل صلاحيات جميع الأدوات لضمان عملها
           chmod +x ./pzb || true
           chmod +x ./img4 || true
           chmod +x ./gtar || true
@@ -45,20 +42,25 @@ jobs:
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. جلب ملف الـ BuildManifest باستخدام الأداة المحلية pzb
+          # 1. جلب ملف الـ BuildManifest
           ./pzb -g BuildManifest.plist "$IPSW_URL"
           
-          # 2. استخراج الرام ديسك الأصلي
-          RAMDISK_PATH=$(grep -A10 "RestoreRamDisk" BuildManifest.plist | grep -A1 "Path" | grep -v "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          # 2. استخراج مسار الرام ديسك الأصلي بطريقة ذكية ومتوافقة مع إصدارات iOS الحديثة
+          RAMDISK_PATH=$(awk '/RestoreRamDisk/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "<string>AssetData/boot/.*dmg</string>" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          if [ -z "$RAMDISK_PATH" ]; then
+            RAMDISK_PATH=$(grep -A 5 "RestoreRamDisk" BuildManifest.plist | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          fi
+          
+          echo "Found Ramdisk Path: $RAMDISK_PATH"
           ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
-          RAMDISK_FILE=$(ls *.dmg | head -1)
+          RAMDISK_FILE=$(basename "$RAMDISK_PATH")
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
           # 3. استخراج ملفات الـ Bootchain الكاملة الخاصة بـ iPhone 11 Pro (d421ap)
-          IBSS_PATH=$(grep -A20 "iBSS" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          IBEC_PATH=$(grep -A20 "iBEC" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          DVT_PATH=$(grep -A30 "DeviceTree" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          KERN_PATH=$(grep -A30 "KernelCache" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          IBSS_PATH=$(awk '/iBSS/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          IBEC_PATH=$(awk '/iBEC/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          DVT_PATH=$(awk '/DeviceTree/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "d421ap" -A 5 | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          KERN_PATH=$(awk '/KernelCache/ {flag=1; next} /<\/dict>/ {flag=0} flag' BuildManifest.plist | grep "d421ap" -A 5 | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
 
           ./pzb -g "$IBSS_PATH" "$IPSW_URL"
           ./pzb -g "$IBEC_PATH" "$IPSW_URL"
@@ -90,7 +92,6 @@ jobs:
           set -ex
           mkdir -p SSHRD
           sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk1.dmg
-          # استخدام أداة gtar لتعديل الملفات داخلياً
           ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || true
           cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems || true
           chmod 755 SSHRD/usr/sbin/mount_filesystems || true

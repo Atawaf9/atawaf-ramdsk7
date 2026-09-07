@@ -17,7 +17,7 @@ jobs:
       - name: Download and decrypt ramdisk & bootchain files
         run: |
           set -ex
-          IPSW_URL="https://cdn-apple.com"
+          IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
           # 1. استخراج الـ BuildManifest لقراءة مسارات الملفات
           ./pzp -g BuildManifest.plist "$IPSW_URL"

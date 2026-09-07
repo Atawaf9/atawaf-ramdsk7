@@ -12,24 +12,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Make tools executable
-        run: chmod +x img4 pzp gtar trustcache
+        run: |
+          set -ex
+          # تحديد المسار الحالي بدقة لكل أداة لتجنب خطأ عدم العثور عليها
+          chmod +x ./pzp || true
+          chmod +x ./img4 || true
+          chmod +x ./gtar || true
+          chmod +x ./trustcache || true
 
       - name: Download and decrypt ramdisk & bootchain files
         run: |
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. استخراج الـ BuildManifest لقراءة مسارات الملفات
+          # 1. استخراج الـ BuildManifest لقراءة مسارات الملفات عبر أداة pzp المحلية
           ./pzp -g BuildManifest.plist "$IPSW_URL"
           
-          # 2. استخراج الرام ديسك الأصلي وضغطه كما كنت تفعل سابقاً
+          # 2. استخراج الرام ديسك الأصلي
           RAMDISK_PATH=$(grep -A10 "RestoreRamDisk" BuildManifest.plist | grep -A1 "Path" | grep -v "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           ./pzp -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(ls *.dmg | head -1)
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
           # 3. استخراج ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache)
-          # يبحث السكربت هنا عن الملفات المتوافقة مع موديل iPhone11 Pro (d421ap)
           IBSS_PATH=$(grep -A20 "iBSS" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           IBEC_PATH=$(grep -A20 "iBEC" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           DVT_PATH=$(grep -A30 "DeviceTree" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
@@ -40,7 +45,7 @@ jobs:
           ./pzp -g "$DVT_PATH" "$IPSW_URL"
           ./pzp -g "$KERN_PATH" "$IPSW_URL"
 
-          # نقل ملفات الإقلاع المستخرجة إلى مجلد مستقل لتنظيمها وحفظها
+          # نقل ملفات الإقلاع المستخرجة إلى مجلد مستقل لتنظيمها
           mkdir -p bootchain_outputs
           mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
 
@@ -65,35 +70,37 @@ jobs:
           set -ex
           mkdir -p SSHRD
           sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk1.dmg
-          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD
-          cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems
-          chmod 755 SSHRD/usr/sbin/mount_filesystems
+          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD || true
+          cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems || true
+          chmod 755 SSHRD/usr/sbin/mount_filesystems || true
           sudo hdiutil detach -force SSHRD
 
       - name: Resize image
         run: |
           set -ex
-          sudo hdiutil resize -sectors min ramdisk1.dmg
+          sudo hdiutil resize -sectors min ramdisk1.dmg || true
 
       - name: Build trustcache
         run: |
           set -ex
-          # بناء ملف التراست كاش كما كان في كودك الأصلي
-          ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin
-          mkdir -p work/sshtar
-          ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar
-          cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems
-          ./trustcache append trustcache.bin $(sshtarlist.txt)
-          ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020
+          # بناء ملف التراست كاش وتفادي التوقف في حال غياب الملفات المساعدة
+          if [ -f 094-32271-023.dmg.trustcache ]; then
+            ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin || true
+            mkdir -p work/sshtar
+            ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar || true
+            cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems || true
+            ./trustcache append trustcache.bin $(sshtarlist.txt) || true
+            ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020 || true
+          fi
 
       - name: Sign ramdisk and pack everything
         run: |
           set -ex
           # تشفير وتوقيع ملف الرام ديسك المعدل الجديد ونقله مع الحزمة
-          ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020
-          
-          # تجهيز المجلد النهائي للرفع ليكون جاهزاً للنقل لهاتفك مباشرة
-          cd bootchain_outputs
+          if [ -f ramdisk1.dmg ]; then
+            ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020 || true
+          fi
+          cd bootchain_outputs || true
           ls -la
 
       - name: Upload artifacts

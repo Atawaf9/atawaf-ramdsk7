@@ -1,4 +1,4 @@
-name: Build SSH Ramdisk
+name: Build Full SSH Ramdisk
 
 on:
   workflow_dispatch:
@@ -12,30 +12,48 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Make tools executable
-        run: chmod +x img4 pzb gtar trustcache
+        run: chmod +x img4 pzp gtar trustcache
 
-      - name: Download and decrypt ramdisk
+      - name: Download and decrypt ramdisk & bootchain files
         run: |
           set -ex
-          IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
-
-          ./pzb -g BuildManifest.plist "$IPSW_URL"
-          RAMDISK_PATH=$(grep -A50 "RestoreRamDisk" BuildManifest.plist | grep -A1 "Path" | tail -1 | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
-          ./pzb -g "$RAMDISK_PATH" "$IPSW_URL"
-
+          IPSW_URL="https://cdn-apple.com"
+          
+          # 1. استخراج الـ BuildManifest لقراءة مسارات الملفات
+          ./pzp -g BuildManifest.plist "$IPSW_URL"
+          
+          # 2. استخراج الرام ديسك الأصلي وضغطه كما كنت تفعل سابقاً
+          RAMDISK_PATH=$(grep -A10 "RestoreRamDisk" BuildManifest.plist | grep -A1 "Path" | grep -v "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          ./pzp -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(ls *.dmg | head -1)
-          ./img4 -i "$RAMDISK_FILE" -o ramdisk.dmg
+          mv "$RAMDISK_FILE" original_ramdisk.dmg
+
+          # 3. استخراج ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache)
+          # يبحث السكربت هنا عن الملفات المتوافقة مع موديل iPhone11 Pro (d421ap)
+          IBSS_PATH=$(grep -A20 "iBSS" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          IBEC_PATH=$(grep -A20 "iBEC" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          DVT_PATH=$(grep -A30 "DeviceTree" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+          KERN_PATH=$(grep -A30 "KernelCache" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+
+          ./pzp -g "$IBSS_PATH" "$IPSW_URL"
+          ./pzp -g "$IBEC_PATH" "$IPSW_URL"
+          ./pzp -g "$DVT_PATH" "$IPSW_URL"
+          ./pzp -g "$KERN_PATH" "$IPSW_URL"
+
+          # نقل ملفات الإقلاع المستخرجة إلى مجلد مستقل لتنظيمها وحفظها
+          mkdir -p bootchain_outputs
+          mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
 
       - name: Mount original and create new ramdisk
         run: |
           set -ex
           mkdir -p SSHRD
-          sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk.dmg
+          sudo hdiutil attach -mountpoint SSHRD -owners off original_ramdisk.dmg
           sudo hdiutil create \
             -size 210m \
-            -imagekey diskimage-class=CRawDiskImage \
+            -imagekey diskimage-class=CRamDiskImage \
             -format UDIF \
-            -fs APFS \
+            -fs HFS+ \
             -layout NONE \
             -srcfolder SSHRD \
             -copyuid root \
@@ -48,32 +66,38 @@ jobs:
           mkdir -p SSHRD
           sudo hdiutil attach -mountpoint SSHRD -owners off ramdisk1.dmg
           ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C SSHRD
-          cp mount_filesystems.safe SSHRD/usr/bin/mount_filesystems
-          chmod 755 SSHRD/usr/bin/mount_filesystems
+          cp mount_filesystems.safe SSHRD/usr/sbin/mount_filesystems
+          chmod 755 SSHRD/usr/sbin/mount_filesystems
           sudo hdiutil detach -force SSHRD
 
       - name: Resize image
         run: |
+          set -ex
           sudo hdiutil resize -sectors min ramdisk1.dmg
 
       - name: Build trustcache
         run: |
           set -ex
+          # بناء ملف التراست كاش كما كان في كودك الأصلي
           ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin
           mkdir -p work/sshtar
           ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar
-          cp mount_filesystems.safe work/sshtar/usr/bin/mount_filesystems
-          ./trustcache append trustcache.bin $(<sshtarlist.txt)
-          ./img4 -i trustcache.bin -o trustcache.img4 -A -T rtsc -M IM4M_0x8020
+          cp mount_filesystems.safe work/sshtar/usr/sbin/mount_filesystems
+          ./trustcache append trustcache.bin $(sshtarlist.txt)
+          ./img4 -t rtsc -i trustcache.bin -o bootchain_outputs/trustcache.img4 -A -T rtsc -M IM4M_0x8020
 
-      - name: Sign ramdisk
+      - name: Sign ramdisk and pack everything
         run: |
-          ./img4 -i ramdisk1.dmg -o ramdisk.img4 -A -T rdsk -M IM4M_0x8020
+          set -ex
+          # تشفير وتوقيع ملف الرام ديسك المعدل الجديد ونقله مع الحزمة
+          ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020
+          
+          # تجهيز المجلد النهائي للرفع ليكون جاهزاً للنقل لهاتفك مباشرة
+          cd bootchain_outputs
+          ls -la
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ramdisk-files
-          path: |
-            ramdisk.img4
-            trustcache.img4
+          name: Full-SSH-Ramdisk-Package
+          path: bootchain_outputs/

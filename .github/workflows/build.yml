@@ -13,17 +13,18 @@ jobs:
 
       - name: Make tools executable
         run: |
-          chmod +x pzp img4 gtar trustcache
+          # إضافة النقطة والسلاش لضمان العثور على الأدوات محلياً داخل المجلد
+          chmod +x ./pzp ./img4 ./gtar ./trustcache
 
       - name: Download BuildManifest and Extract All Paths
         run: |
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. جلب ملف الـ BuildManifest بنفس طريقتك الناجحة
+          # تشغيل أداة pzp بالمسار الصحيح
           ./pzp -g BuildManifest.plist "$IPSW_URL"
           
-          # 2. استخراج المسارات بدقة عبر بايثون لتفادي خطأ الأسماء الفارغة
+          # استخراج المسارات بدقة عبر بايثون
           python3 -c '
           import plistlib
           with open("BuildManifest.plist", "rb") as f:
@@ -38,7 +39,6 @@ jobs:
           print(f"KERN_PATH={manifest[\"KernelCache\"][\"Info\"][\"Path\"]}")
           ' > paths.txt
 
-          # تصدير المسارات كمتغيرات للنظام
           cat paths.txt
 
       - name: Download and decrypt ramdisk & bootchain files
@@ -46,15 +46,13 @@ jobs:
           set -ex
           IPSW_URL="https://cdn-apple.com"
           
-          # قراءة المتغيرات المستخرجة
           export $(cat paths.txt | xargs)
           
-          # تحميل الرام ديسك الأصلي وضبط اسمه
+          # استخدام الأدوات بالمسار المحلي الصحيح
           ./pzp -g "$RAMDISK_PATH" "$IPSW_URL"
           RAMDISK_FILE=$(basename "$RAMDISK_PATH")
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
-          # تحميل باقي ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache)
           ./pzp -g "$IBSS_PATH" "$IPSW_URL"
           ./pzp -g "$IBEC_PATH" "$IPSW_URL"
           ./pzp -g "$DVT_PATH" "$IPSW_URL"
@@ -94,13 +92,11 @@ jobs:
       - name: Build trustcache and prepare outputs
         run: |
           set -ex
-          # تجهيز مجلد المخرجات النهائي ليتم رفعه كـ Artifact
           mkdir -p bootchain_outputs
           
-          # نقل ملفات الـ Bootchain المستخرجة وتجهيز أسمائها بحروف صغيرة
+          # نقل وتجميع كافة الملفات المستخرجة
           mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
           
-          # بناء التراست كاش (الترويسة) ونقله للمجلد
           ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin
           mkdir -p work/sshtar
           ./gtar -x --no-overwrite-dir -f ssh.tar.gz -C work/sshtar
@@ -111,7 +107,6 @@ jobs:
       - name: Sign ramdisk and finalize package
         run: |
           set -ex
-          # توقيع الرام ديسك المعدل الجديد وحفظه في مجلد المخرجات
           ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020
           
           cd bootchain_outputs

@@ -11,21 +11,26 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Make tools executable
+      - name: Install and Setup Official pzp Tool
         run: |
           set -ex
-          # تحديد المسار الحالي بدقة لكل أداة لتجنب خطأ عدم العثور عليها
-          chmod +x ./pzp || true
-          chmod +x ./img4 || true
-          chmod +x ./gtar || true
-          chmod +x ./trustcache || true
+          # تحميل أحدث نسخة رسمية مستقرة من أداة pzp المخصصة لنظام macOS
+          curl -LO "https://github.com"
+          unzip pzp_macOS.zip
+          
+          # استبدال الملف القديم بالأداة الرسمية الصحيحة وتفعيل صلاحياتها
+          mv pzp_macOS pzp
+          chmod +x pzp
+          chmod +x img4 || true
+          chmod +x gtar || true
+          chmod +x trustcache || true
 
       - name: Download and decrypt ramdisk & bootchain files
         run: |
           set -ex
           IPSW_URL="https://updates.cdn-apple.com/2024WinterFCS/fullrestores/052-79668/B74922D1-E0D1-46A6-A324-A1B97DFC32F6/iPhone12,3,iPhone12,5_17.4.1_21E237_Restore.ipsw"
           
-          # 1. استخراج الـ BuildManifest لقراءة مسارات الملفات عبر أداة pzp المحلية
+          # 1. استخراج الـ BuildManifest
           ./pzp -g BuildManifest.plist "$IPSW_URL"
           
           # 2. استخراج الرام ديسك الأصلي
@@ -34,7 +39,7 @@ jobs:
           RAMDISK_FILE=$(ls *.dmg | head -1)
           mv "$RAMDISK_FILE" original_ramdisk.dmg
 
-          # 3. استخراج ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache)
+          # 3. استخراج ملفات الـ Bootchain الكاملة (iBSS, iBEC, DeviceTree, KernelCache) لـ iPhone 11 Pro (d421ap)
           IBSS_PATH=$(grep -A20 "iBSS" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           IBEC_PATH=$(grep -A20 "iBEC" BuildManifest.plist | grep -m1 "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
           DVT_PATH=$(grep -A30 "DeviceTree" BuildManifest.plist | grep -A1 "d421ap" | grep "Path" | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
@@ -45,7 +50,7 @@ jobs:
           ./pzp -g "$DVT_PATH" "$IPSW_URL"
           ./pzp -g "$KERN_PATH" "$IPSW_URL"
 
-          # نقل ملفات الإقلاع المستخرجة إلى مجلد مستقل لتنظيمها
+          # تجميع كافة ملفات الإقلاع المستخرجة في مجلد المخرجات
           mkdir -p bootchain_outputs
           mv *.im4p *.img4 kernelcache* bootchain_outputs/ 2>/dev/null || true
 
@@ -83,7 +88,6 @@ jobs:
       - name: Build trustcache
         run: |
           set -ex
-          # بناء ملف التراست كاش وتفادي التوقف في حال غياب الملفات المساعدة
           if [ -f 094-32271-023.dmg.trustcache ]; then
             ./img4 -i 094-32271-023.dmg.trustcache -o trustcache.bin || true
             mkdir -p work/sshtar
@@ -96,7 +100,6 @@ jobs:
       - name: Sign ramdisk and pack everything
         run: |
           set -ex
-          # تشفير وتوقيع ملف الرام ديسك المعدل الجديد ونقله مع الحزمة
           if [ -f ramdisk1.dmg ]; then
             ./img4 -i ramdisk1.dmg -o bootchain_outputs/ramdisk.img4 -A -T rdisk -M IM4M_0x8020 || true
           fi

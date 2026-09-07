@@ -73,7 +73,7 @@ jobs:
           ./img4tool -i trustcache.bin -o trustcache.img4 -A -T rtsc -M IM4M_0x8020 || touch trustcache.img4
 
       - name: Upload Completed Ramdisk
-        uses: actions/artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: ssh-ramdisk-output
           path: |
